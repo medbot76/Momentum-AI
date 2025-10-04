@@ -1,0 +1,3 @@
+[submodule "backend/med_bot2"]
+	path = backend/med_bot2
+	url = https://github.com/abakarkosso/med-bot/tree/embedding-test

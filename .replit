@@ -1,0 +1,30 @@
+language = "python3"
+run = "cd backend && python app.py"
+
+[nix]
+channel = "stable-23_11"
+deps = ["pkgs.gcc-libs"]
+
+[deployment]
+run = ["sh", "-c", "cd backend && python app.py"]
+deploymentTarget = "cloudrun"
+
+[env]
+PYTHONPATH = "/home/runner/workspace/MedBotAI/backend"
+
+[packager]
+language = "python3"
+
+[packager.features]
+packageSearch = true
+guessImports = true
+
+[languages.python3]
+pattern = "**/*.py"
+syntax = "python"
+
+[languages.python3.languageServer]
+start = [ "python3", "-m", "pylsp" ]
+
+[deployment.build]
+builder = "nixpacks" 

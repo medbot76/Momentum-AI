@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["libstdcxx5", "stdenv.cc.cc.lib", "gcc", "gcc-unwrapped", "glibc", "zlib", "openssl"]
+
+[phases.install]
+cmds = [
+  "cd backend",
+  "pip install -r requirements.txt"
+]
+
+[phases.build]
+cmds = ["echo 'Build complete'"]
+
+[start]
+cmd = "cd backend && python app.py" 

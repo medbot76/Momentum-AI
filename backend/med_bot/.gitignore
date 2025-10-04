@@ -1,0 +1,37 @@
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+
+# Ignore virtual environments
+voyenv/
+.venv/
+env/
+venv/
+ENV/
+bin/
+include/
+lib/
+lib64/
+
+# Ignore build artifacts
+dist/
+build/
+*.egg-info/
+
+# Ignore OS files
+.DS_Store
+thumbs.db
+
+# Ignore specific IDE files
+.vscode/
+.idea/
+
+# Ignore generated files/directories from the project
+.chroma/
+
+# Ignore test files
+test_image.py 
+test_mitosis.py
+
+# Ignore course_content used for testing
+course_content/

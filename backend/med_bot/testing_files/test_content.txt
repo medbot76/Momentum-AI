@@ -1,0 +1,46 @@
+The Krebs Cycle
+
+The Krebs cycle, also known as the citric acid cycle or tricarboxylic acid (TCA) cycle, is a series of chemical reactions used by all aerobic organisms to release stored energy through the oxidation of acetyl-CoA derived from carbohydrates, fats, and proteins.
+
+The cycle occurs in the mitochondria of cells and is central to cellular respiration. It follows glycolysis and the pyruvate dehydrogenase reaction, which convert glucose to acetyl-CoA.
+
+Key steps in the Krebs cycle:
+1. Acetyl-CoA combines with oxaloacetate to form citrate
+2. Citrate is converted to isocitrate
+3. Isocitrate is oxidized to α-ketoglutarate, releasing CO2
+4. α-Ketoglutarate is converted to succinyl-CoA, releasing CO2
+5. Succinyl-CoA is converted to succinate, generating GTP/ATP
+6. Succinate is oxidized to fumarate
+7. Fumarate is hydrated to malate
+8. Malate is oxidized to oxaloacetate
+
+The cycle produces:
+- 3 NADH molecules (which generate ATP in the electron transport chain)
+- 1 FADH2 molecule (which generates ATP in the electron transport chain)
+- 1 GTP molecule (equivalent to ATP)
+- 2 CO2 molecules
+
+The Krebs cycle is regulated by several factors including the availability of substrates and the energy status of the cell.
+
+Glycolysis
+
+Glycolysis is a metabolic pathway that converts glucose into pyruvate. It is the first stage of cellular respiration in all living organisms.
+
+The process involves a sequence of ten enzyme-catalyzed reactions that can be divided into two phases:
+- The preparatory phase (energy investment phase)
+- The payoff phase (energy generation phase)
+
+In the preparatory phase, ATP is consumed to convert glucose into two molecules of glyceraldehyde-3-phosphate. In the payoff phase, these molecules are oxidized to pyruvate, generating ATP and NADH.
+
+Key outcomes of glycolysis:
+- 2 pyruvate molecules
+- 2 ATP molecules (net gain)
+- 2 NADH molecules
+- 2 water molecules
+
+Unlike the Krebs cycle, glycolysis occurs in the cytoplasm of cells and does not require oxygen. It is therefore a key process in anaerobic respiration as well as aerobic respiration.
+
+Pyruvate, the end product of glycolysis, can undergo different fates depending on the organism and the availability of oxygen:
+- In aerobic conditions, pyruvate enters the mitochondria and is converted to acetyl-CoA for the Krebs cycle
+- In anaerobic conditions in animals, pyruvate is converted to lactate
+- In anaerobic conditions in yeast and some bacteria, pyruvate is converted to ethanol and CO2
