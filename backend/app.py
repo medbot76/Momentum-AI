@@ -1,12 +1,12 @@
 # backend/app.py
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
-from med_bot2.chatbot import ChatBot
-from med_bot2.tts_elevenlabs import generate_teen_voice
-from med_bot2.stt_whisper import transcribe_audio
-from med_bot2.exam_feature.exam_generator import ExamGenerator, ExamConfig, Difficulty
-from med_bot2.flashcards_feature.rag_flashcards import RAGFlashcards
-from med_bot2.study_planner import StudyPlanner
+from med_bot3.chatbot import ChatBot
+from med_bot3.tts_elevenlabs import generate_teen_voice
+from med_bot3.stt_whisper import transcribe_audio
+from med_bot3.exam_feature.exam_generator import ExamGenerator, ExamConfig, Difficulty
+from med_bot3.rag_flashcards import RAGFlashcards
+from med_bot3.study_planner import StudyPlanner
 from supabase import create_client, Client
 import os
 import asyncio

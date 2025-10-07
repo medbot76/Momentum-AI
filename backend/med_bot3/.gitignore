@@ -1,0 +1,72 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+.env.staging
+auth_config.json
+
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+
+# Ignore virtual environments
+voyenv/
+.venv/
+env/
+venv/
+ENV/
+bin/
+include/
+lib/
+lib64/
+
+# Ignore build artifacts
+dist/
+build/
+*.egg-info/
+
+# Ignore OS files
+.DS_Store
+thumbs.db
+
+# Ignore specific IDE files
+.vscode/
+.idea/
+
+# Ignore generated files/directories from the project
+.chroma/
+
+# Ignore test files
+test_image.py 
+test_mitosis.py
+
+# Ignore course_content used for testing
+course_content/
+
+# Backup files and directories
+backups/
+*.backup
+*.sql.bak
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+logs/
+
+# Testing files (keep structure but ignore content)
+testing_files/*.pdf
+testing_files/*.png
+testing_files/*.jpg
+
+# Supabase local development
+.supabase/
+
+# Large model files
+models/
+*.model
