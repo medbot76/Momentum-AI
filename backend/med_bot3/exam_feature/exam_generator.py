@@ -399,18 +399,20 @@ class ExamGenerator:
             raise ValueError(f"Unknown provider: {provider}")
     
 
-    async def get_content(self, topic: Optional[str] = None) -> str:
+    async def get_content(self, topic: Optional[str] = None, notebook_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         """Get relevant content from the RAG pipeline"""
 
-        # Temporarily lower the similarity threshold for better matching
+        # Temporarily lower the similarity threshold for better matching (use 0.15 to match current low scores)
         original_threshold = self.rag.similarity_threshold
-        self.rag.similarity_threshold = 0.5
+        self.rag.similarity_threshold = 0.15  # Lower threshold to allow more chunks through
         try:
             if topic:
                 # Query for specific topic
                 result = await self.rag.query(
                     question=f"What is {topic}? Explain {topic} in detail.",
-                    top_k=4
+                    notebook_id=notebook_id or "default",
+                    top_k=6,  # Increase top_k to get more chunks
+                    user_id=user_id
                 )
                 if not result["chunks"]:
                     return ""
@@ -419,7 +421,9 @@ class ExamGenerator:
                 # Get general content
                 result = await self.rag.query(
                     question="What are the main concepts and topics covered in this course?",
-                    top_k=5
+                    notebook_id=notebook_id or "default",
+                    top_k=6,  # Increase top_k to get more chunks
+                    user_id=user_id
                 )
                 if not result["chunks"]:
                     return ""

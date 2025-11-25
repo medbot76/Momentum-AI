@@ -493,6 +493,14 @@ const chatHistory = [
     const [isExamSettingsOpen, setIsExamSettingsOpen] = useState(false);
     const [isExamSettingsClosing, setIsExamSettingsClosing] = useState(false);
     const [isExamFullscreen, setIsExamFullscreen] = useState(false);
+    
+    // Notebook management state
+    const [isNewChatDropdownOpen, setIsNewChatDropdownOpen] = useState(false);
+    const [isCreatingNewChat, setIsCreatingNewChat] = useState(false);
+    const [newChatNotebookName, setNewChatNotebookName] = useState('');
+    const [availableNotebooks, setAvailableNotebooks] = useState([]);
+    const [currentNotebookId, setCurrentNotebookId] = useState(null);
+    const [currentNotebookName, setCurrentNotebookName] = useState('Default Notebook');
   
     const navigate = useNavigate();
     const signOut = async () => {
@@ -500,6 +508,154 @@ const chatHistory = [
       if (error) throw error;
       navigate("/login");
     }
+
+    // Get or create notebook for the current chat
+    const getOrCreateNotebook = async (notebookName = 'Default Notebook') => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (!user?.id) {
+          return null;
+        }
+
+        // Try to find existing notebook with this name
+        const { data: notebooks } = await supabase
+          .from('notebooks')
+          .select('id, name')
+          .eq('user_id', user.id)
+          .eq('name', notebookName)
+          .limit(1);
+        
+        if (notebooks && notebooks.length > 0) {
+          return notebooks[0];
+        }
+
+        // Create new notebook if it doesn't exist
+        const { data: newNotebook, error } = await supabase
+          .from('notebooks')
+          .insert([{
+            user_id: user.id,
+            name: notebookName,
+            description: `Notebook: ${notebookName}`,
+            color: '#4285f4'
+          }])
+          .select('id, name')
+          .single();
+
+        if (error) {
+          console.error('Error creating notebook:', error);
+          return null;
+        }
+
+        return newNotebook;
+      } catch (error) {
+        console.error('Error getting/creating notebook:', error);
+        return null;
+      }
+    };
+
+    // Load available notebooks
+    const loadAvailableNotebooks = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) return;
+
+        const { data: notebooks } = await supabase
+          .from('notebooks')
+          .select('id, name, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+
+        setAvailableNotebooks(notebooks || []);
+      } catch (error) {
+        console.error('Error loading notebooks:', error);
+      }
+    };
+
+    // Initialize default notebook on mount
+    useEffect(() => {
+      const initializeDefaultNotebook = async () => {
+        const notebook = await getOrCreateNotebook('Default Notebook');
+        if (notebook) {
+          setCurrentNotebookId(notebook.id);
+          setCurrentNotebookName(notebook.name);
+        }
+        // Load all available notebooks
+        await loadAvailableNotebooks();
+      };
+      initializeDefaultNotebook();
+    }, []);
+
+    // Handle new chat creation (from sidebar)
+    const handleNewChat = () => {
+      if (availableNotebooks.length > 0) {
+        setIsNewChatDropdownOpen(true);
+      } else {
+        setIsCreatingNewChat(true);
+        setNewChatNotebookName('');
+      }
+    };
+
+    // Create new notebook and start new chat
+    const createNewChat = async () => {
+      if (!newChatNotebookName.trim()) {
+        alert('Please enter a notebook name');
+        return;
+      }
+
+      try {
+        const notebook = await getOrCreateNotebook(newChatNotebookName.trim());
+        if (notebook) {
+          // Reset chat state
+          setMessages([]);
+          setInputMessage('');
+          setCurrentNotebookId(notebook.id);
+          setCurrentNotebookName(notebook.name);
+          setUploadedFiles([]);
+          
+          // Close new chat modal
+          setIsCreatingNewChat(false);
+          setNewChatNotebookName('');
+          
+          // Refresh available notebooks list
+          await loadAvailableNotebooks();
+          
+          // Chatbot will automatically react to currentNotebookId prop change
+        }
+      } catch (error) {
+        console.error('Error creating new chat:', error);
+        alert('Failed to create new chat');
+      }
+    };
+
+    // Cancel new chat creation
+    const cancelNewChat = () => {
+      setIsCreatingNewChat(false);
+      setNewChatNotebookName('');
+    };
+
+    // Switch to a different notebook
+    const switchToNotebook = async (notebook) => {
+      try {
+        console.log('Switching to notebook:', notebook.id, notebook.name);
+        
+        // Reset chat state
+        setMessages([]);
+        setInputMessage('');
+        setCurrentNotebookId(notebook.id);
+        setCurrentNotebookName(notebook.name);
+        setUploadedFiles([]);
+        
+        // Close dropdown
+        setIsNewChatDropdownOpen(false);
+        
+        console.log('Notebook switched successfully');
+      } catch (error) {
+        console.error('Error switching to notebook:', error);
+        alert('Failed to switch notebook');
+      }
+    };
+
 
     const modes = [
       { value: 'drag-drop', label: 'Drag & Drop', emoji: '📋' },
@@ -1080,7 +1236,10 @@ const chatHistory = [
           {/* New Chat Button */}
           {sidebarOpen && (
             <div className="p-6">
-              <button className="w-full flex items-center gap-3 px-4 py-3 bg-black text-white rounded-xl hover:bg-gray-800 transition-all duration-200 font-medium">
+              <button 
+                onClick={handleNewChat}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-black text-white rounded-xl hover:bg-gray-800 transition-all duration-200 font-medium"
+              >
                 <Plus className="w-4 h-4" />
                 <span>New Chat</span>
               </button>
@@ -1204,8 +1363,114 @@ const chatHistory = [
             setIsExamSettingsClosing={setIsExamSettingsClosing}
             isExamFullscreen={isExamFullscreen}
             setIsExamFullscreen={setIsExamFullscreen}
+            currentNotebookId={currentNotebookId}
           />
         </div>
+
+        {/* New Chat Dropdown */}
+        {isNewChatDropdownOpen && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center">
+            <div 
+              className="fixed inset-0 bg-black/20 backdrop-blur-sm"
+              onClick={() => setIsNewChatDropdownOpen(false)}
+            />
+            <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200/40 p-6 w-full max-w-md mx-4">
+              <div className="text-center">
+                <div className="flex items-center justify-center w-12 h-12 bg-blue-50 rounded-xl mx-auto mb-4">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-blue-500">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">Choose Notebook</h3>
+                <p className="text-gray-600 mb-6">Select an existing notebook or create a new one.</p>
+                
+                <div className="space-y-3 mb-6 max-h-60 overflow-y-auto">
+                  {availableNotebooks.map((notebook) => (
+                    <button
+                      key={notebook.id}
+                      onClick={() => {
+                        setIsNewChatDropdownOpen(false);
+                        switchToNotebook(notebook);
+                      }}
+                      className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                        notebook.id === currentNotebookId
+                          ? 'border-blue-200 bg-blue-50 text-blue-900'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="font-medium">{notebook.name}</div>
+                      <div className="text-sm text-gray-500">
+                        {new Date(notebook.created_at).toLocaleDateString()}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                <button
+                  onClick={() => {
+                    setIsNewChatDropdownOpen(false);
+                    setIsCreatingNewChat(true);
+                    setNewChatNotebookName('');
+                  }}
+                  className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors font-medium"
+                >
+                  Create New Notebook
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* New Chat Modal */}
+        {isCreatingNewChat && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center">
+            <div 
+              className="fixed inset-0 bg-black/20 backdrop-blur-sm"
+              onClick={cancelNewChat}
+            />
+            <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200/40 p-6 w-full max-w-md mx-4">
+              <div className="text-center">
+                <div className="flex items-center justify-center w-12 h-12 bg-blue-50 rounded-xl mx-auto mb-4">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-blue-500">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">Create New Chat</h3>
+                <p className="text-gray-600 mb-6">Enter a name for your new notebook to start a fresh conversation.</p>
+                
+                <input
+                  type="text"
+                  value={newChatNotebookName}
+                  onChange={(e) => setNewChatNotebookName(e.target.value)}
+                  placeholder="e.g., Biology Study, Math Problems, History Notes"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      createNewChat();
+                    }
+                  }}
+                  autoFocus
+                />
+                
+                <div className="flex gap-3 mt-6">
+                  <button
+                    onClick={cancelNewChat}
+                    className="flex-1 px-4 py-3 text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={createNewChat}
+                    disabled={!newChatNotebookName.trim()}
+                    className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
+                  >
+                    Create Chat
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

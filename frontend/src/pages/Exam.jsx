@@ -10,6 +10,7 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import { API_ENDPOINTS } from "../config";
 import clsx from "clsx";
+import supabase from "../helper/supabaseClient";
 
 function Exam({
   initialPrompt,
@@ -22,6 +23,8 @@ function Exam({
   format,
   uploadedFiles,
   exampleExamFilename,
+  notebookId,
+  userId,
 }) {
   const [examState, setExamState] = useState("initial"); // 'initial', 'generating', 'display'
   const [userPrompt, setUserPrompt] = useState("");
@@ -176,6 +179,20 @@ function Exam({
     setExamState("display");
 
     try {
+      // Get user_id and notebook_id
+      let userIdToUse = userId || 'web-user';
+      let notebookIdToUse = notebookId;
+      
+      // Try to get user from Supabase if not provided
+      if (!userId) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            userIdToUse = user.id;
+          }
+        } catch (_) {}
+      }
+      
       // First, get the exam content as text
       const contentResponse = await fetch(API_ENDPOINTS.EXAM_PDF, {
         method: "POST",
@@ -188,6 +205,8 @@ function Exam({
           format: "Text", // Request text format for display
           files: uploadedFiles ? uploadedFiles.map((f) => f.name) : [],
           example_exam_filename: exampleExamFilename || undefined,
+          notebook_id: notebookIdToUse,
+          user_id: userIdToUse,
         }),
       });
 
@@ -213,6 +232,8 @@ function Exam({
           format: "PDF", // Request PDF format for download
           files: uploadedFiles ? uploadedFiles.map((f) => f.name) : [],
           example_exam_filename: exampleExamFilename || undefined,
+          notebook_id: notebookIdToUse,
+          user_id: userIdToUse,
         }),
       });
 

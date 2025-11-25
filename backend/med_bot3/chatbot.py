@@ -74,7 +74,8 @@ class ChatBot:
     def _get_sentence_model(cls):
         """Get or initialize the sentence transformer model."""
         if cls._sentence_model is None:
-            cls._sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+            # Use same model as RAG pipeline for consistency
+            cls._sentence_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
         return cls._sentence_model
     
     @classmethod
@@ -483,12 +484,10 @@ class ChatBot:
             best_chunk = await self._find_relevant_transcript_chunk(chunks, question)
             
             if best_chunk:
-                def fmt_time(seconds):
-                    m, s = divmod(int(seconds), 60)
-                    return f"{m:02d}:{s:02d}"
+                # Return timestamp as numbers (seconds) for frontend compatibility
                 timestamp = {
-                    "start": fmt_time(best_chunk["start"]),
-                    "end": fmt_time(best_chunk["end"])
+                    "start": best_chunk["start"],  # Keep as number (seconds)
+                    "end": best_chunk["end"]       # Keep as number (seconds)
                 }
                 snippet = best_chunk["text"]
             else:
@@ -522,16 +521,30 @@ class ChatBot:
             return scored_chunks[0][1]
         # Otherwise, embed only the top N chunks
         top_chunks = [chunk for _, chunk in scored_chunks[:max_chunks_to_embed]]
+        
+        # Get embeddings and normalize them
+        model = self._get_sentence_model()
         q_embed = await asyncio.to_thread(
-            lambda: self._pad_embedding(self._get_sentence_model().encode(question), 768)
+            lambda: model.encode(question, convert_to_numpy=True, normalize_embeddings=False)
         )
+        q_embed = np.array(q_embed, dtype=np.float32)
+        q_norm = np.linalg.norm(q_embed)
+        if q_norm > 1e-8:
+            q_embed = q_embed / q_norm
+        
         best_chunk = None
         best_score = -1
         for chunk in top_chunks:
             chunk_embed = await asyncio.to_thread(
-                lambda: self._pad_embedding(self._get_sentence_model().encode(chunk["text"]), 768)
+                lambda: model.encode(chunk["text"], convert_to_numpy=True, normalize_embeddings=False)
             )
-            sim = np.dot(q_embed, chunk_embed) / (np.linalg.norm(q_embed) * np.linalg.norm(chunk_embed))
+            chunk_embed = np.array(chunk_embed, dtype=np.float32)
+            chunk_norm = np.linalg.norm(chunk_embed)
+            if chunk_norm > 1e-8:
+                chunk_embed = chunk_embed / chunk_norm
+            
+            # Cosine similarity: dot product of normalized vectors
+            sim = float(np.dot(q_embed, chunk_embed))
             if sim > best_score and sim > similarity_threshold:
                 best_score = sim
                 best_chunk = chunk

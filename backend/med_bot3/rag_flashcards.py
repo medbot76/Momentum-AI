@@ -57,7 +57,7 @@ class RAGFlashcards(MultiHopRAGPipeline):  # Use MultiHopRAGPipeline by default;
             return []
 
         # 2) Ask Gemini to craft JSON flashcards
-        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
         prompt = (
             "You are an expert tutor. Using only the provided CONTEXT, "
             f"create {num_cards} short flashcards that help a student self‑test on the topic \"{topic}\". "

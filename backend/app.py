@@ -234,16 +234,25 @@ async def chat_stream():
         # In the future, this can be enhanced with real streaming
         response = await chatbot.ask_question(question, notebook_id=notebook_id)
         
+        # Debug: Log videos if present
+        if isinstance(response, dict) and 'videos' in response:
+            videos = response.get('videos', [])
+            print(f"Stream endpoint: Found {len(videos)} videos in response")
+            if videos:
+                print(f"Stream endpoint: Video links: {[v.get('link', 'N/A') for v in videos]}")
+        
         # Create a simple streaming response
         def generate_stream():
             # Send initial update
             yield f"data: {json.dumps({'type': 'query_start', 'question': question})}\n\n"
             
-            # Send completion update
+            # Send completion update with videos if available
             if isinstance(response, dict) and 'answer' in response:
-                yield f"data: {json.dumps({'type': 'query_complete', 'answer': response['answer']})}\n\n"
+                videos = response.get('videos', [])
+                print(f"Stream endpoint: Sending {len(videos)} videos in query_complete event")
+                yield f"data: {json.dumps({'type': 'query_complete', 'answer': response['answer'], 'videos': videos})}\n\n"
             else:
-                yield f"data: {json.dumps({'type': 'query_complete', 'answer': str(response)})}\n\n"
+                yield f"data: {json.dumps({'type': 'query_complete', 'answer': str(response), 'videos': []})}\n\n"
             
             # Send final completion signal
             yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
@@ -345,6 +354,15 @@ async def upload_document():
             print(f"RAG processing result: {success}")
             
             if success:
+                # Update chunks with the document_id
+                print(f"Linking chunks to document_id: {document_id}")
+                try:
+                    # Update all chunks for this notebook and user that don't have a document_id
+                    result = supabase.table('chunks').update({'document_id': document_id}).eq('notebook_id', notebook_id).eq('user_id', user_id).is_('document_id', 'null').execute()
+                    print(f"Updated {len(result.data) if result.data else 0} chunks with document_id")
+                except Exception as e:
+                    print(f"Warning: Failed to link chunks to document: {e}")
+                
                 update_document_status(document_id, 'completed')
                 return jsonify({
                     'message': 'File uploaded and processed successfully',
@@ -488,15 +506,27 @@ def exam_pdf():
             loop.close()
         # --- END NEW ---
 
+        # Get notebook_id and user_id from request if provided
+        notebook_id = data.get('notebook_id')
+        user_id = data.get('user_id')
+        
+        print(f"Exam generation request - topic: {topic}, notebook_id: {notebook_id}, user_id: {user_id}")
+        
         # Use the same logic as the CLI: get content via RAG pipeline
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            content = loop.run_until_complete(exam_generator.get_content(topic))
+            content = loop.run_until_complete(exam_generator.get_content(topic, notebook_id=notebook_id, user_id=user_id))
+            print(f"Exam generation - retrieved content length: {len(content) if content else 0} characters")
         finally:
             loop.close()
         if not content:
-            return jsonify({'error': 'No content found for the topic or files'}), 400
+            error_msg = f'No content found for the topic "{topic}". '
+            if notebook_id:
+                error_msg += f'Please make sure you have uploaded documents to your notebook (ID: {notebook_id}) and they have been processed.'
+            else:
+                error_msg += 'Please make sure you have uploaded documents and they have been processed.'
+            return jsonify({'error': error_msg}), 400
         # Optionally truncate content to avoid token overflow
         MAX_TOKENS = 1000000
         words = content.split()
@@ -561,12 +591,34 @@ async def flashcards():
         
         # Check if document exists in database
         try:
-            # Find the document in Supabase
+            # First, let's see what documents are in this notebook
+            all_docs = supabase.table('documents').select('*').eq('notebook_id', notebook_uuid).execute()
+            print(f"All documents in notebook {notebook_id}: {[doc['filename'] for doc in all_docs.data]}")
+            
+            # Try to find the document by filename (exact match)
             result = supabase.table('documents').select('*').eq('filename', filename).eq('notebook_id', notebook_uuid).execute()
+            
+            # If not found by filename, try by original_filename
+            if not result.data:
+                print(f"Not found by filename, trying original_filename...")
+                result = supabase.table('documents').select('*').eq('original_filename', filename).eq('notebook_id', notebook_uuid).execute()
+            
+            # If still not found, try partial match
+            if not result.data:
+                print(f"Not found by exact match, trying partial match...")
+                result = supabase.table('documents').select('*').ilike('filename', f'%{filename}%').eq('notebook_id', notebook_uuid).execute()
             
             if not result.data:
                 print(f"Document {filename} not found in database for notebook {notebook_id}")  # Debug log
-                return jsonify({'error': f'File {filename} not found in your notebooks'}), 400
+                # Get available files in this notebook for better error message
+                try:
+                    available_docs = supabase.table('documents').select('filename, original_filename').eq('notebook_id', notebook_uuid).execute()
+                    available_files = [doc.get('original_filename') or doc.get('filename') for doc in available_docs.data]
+                    return jsonify({
+                        'error': f'File "{filename}" not found in this notebook. Available files: {", ".join(available_files[:5])}{"..." if len(available_files) > 5 else ""}'
+                    }), 400
+                except:
+                    return jsonify({'error': f'File {filename} not found in your notebooks'}), 400
             
             document = result.data[0]
             print(f"Found document: {document['filename']} in notebook {notebook_id}")  # Debug log
@@ -576,7 +628,32 @@ async def flashcards():
             
             if not chunks_result.data:
                 print(f"No chunks found for document {filename}")  # Debug log
-                return jsonify({'error': f'File {filename} has not been processed yet. Please wait a moment and try again.'}), 400
+                print(f"Document ID: {document['id']}")
+                print(f"Document status: {document.get('processing_status', 'unknown')}")
+                
+                # Check if there are any chunks for this document at all
+                all_chunks = supabase.table('chunks').select('*').eq('document_id', document['id']).execute()
+                print(f"All chunks for this document: {len(all_chunks.data)}")
+                
+                # Try to find another document in the same notebook that has chunks
+                print(f"Looking for alternative documents with chunks in notebook {notebook_uuid}...")
+                all_docs = supabase.table('documents').select('*').eq('notebook_id', notebook_uuid).execute()
+                print(f"All documents in notebook {notebook_uuid}: {[doc['filename'] for doc in all_docs.data]}")
+                
+                # Find a document that actually has chunks
+                alternative_document = None
+                for doc in all_docs.data:
+                    doc_chunks = supabase.table('chunks').select('id').eq('document_id', doc['id']).limit(1).execute()
+                    if doc_chunks.data:
+                        print(f"Found alternative document with chunks: {doc['filename']}")
+                        alternative_document = doc
+                        break
+                
+                if alternative_document:
+                    print(f"Using alternative document: {alternative_document['filename']}")
+                    document = alternative_document
+                else:
+                    return jsonify({'error': f'File {filename} has not been processed yet. Please use the reprocess button in the files dropdown to process this document for flashcards.'}), 400
             
             print(f"Found {len(chunks_result.data)} chunks for document {filename}")  # Debug log
             
@@ -932,6 +1009,61 @@ def delete_notebook(notebook_id):
         return jsonify({'message': 'Notebook deleted successfully'})
     except Exception as e:
         print(f"Delete Notebook Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/reprocess-document', methods=['POST'])
+@async_route
+async def reprocess_document():
+    """Manually reprocess a document that doesn't have chunks"""
+    try:
+        data = request.json
+        document_id = data.get('document_id')
+        user_id = data.get('user_id')
+        
+        if not document_id:
+            return jsonify({'error': 'Missing document_id'}), 400
+            
+        # Get document info
+        result = supabase.table('documents').select('*').eq('id', document_id).execute()
+        if not result.data:
+            return jsonify({'error': 'Document not found'}), 404
+            
+        document = result.data[0]
+        print(f"Reprocessing document: {document['filename']}")
+        
+        # Check if it already has chunks
+        chunks_result = supabase.table('chunks').select('id').eq('document_id', document_id).limit(1).execute()
+        if chunks_result.data:
+            return jsonify({'message': 'Document already has chunks', 'chunk_count': len(chunks_result.data)})
+        
+        # Get the file from storage and reprocess
+        try:
+            # Download file from storage
+            file_data = supabase.storage.from_('documents').download(document['file_path'])
+            
+            # Save to temporary file
+            temp_path = f"/tmp/reprocess_{document_id}.pdf"
+            with open(temp_path, 'wb') as f:
+                f.write(file_data)
+            
+            # Process with RAG
+            success = await chatbot.upload_document(temp_path, notebook_id=document['notebook_id'], user_id=user_id)
+            
+            # Clean up
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+            if success:
+                return jsonify({'message': 'Document reprocessed successfully'})
+            else:
+                return jsonify({'error': 'Failed to reprocess document'}), 500
+                
+        except Exception as e:
+            print(f"Reprocessing error: {e}")
+            return jsonify({'error': f'Failed to reprocess: {str(e)}'}), 500
+            
+    except Exception as e:
+        print(f"Reprocess endpoint error: {e}")
         return jsonify({'error': str(e)}), 500
 
 # Health check endpoint

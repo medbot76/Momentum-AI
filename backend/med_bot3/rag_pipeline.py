@@ -56,6 +56,7 @@ from supabase import create_client, Client
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import json
+import ast
 from sentence_transformers import SentenceTransformer
 import uuid
 
@@ -107,34 +108,30 @@ def _get_sentence_model():
     """Get or initialize the sentence transformer model."""
     global _sentence_model
     if _sentence_model is None:
-        _sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+        _sentence_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
     return _sentence_model
+
+def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """L2 normalize a numpy array."""
+    if x.ndim == 1:
+        denom = max(np.linalg.norm(x), eps)
+        return (x / denom).astype(np.float32)
+    denom = np.linalg.norm(x, axis=1, keepdims=True)
+    denom = np.maximum(denom, eps)
+    return (x / denom).astype(np.float32)
 
 def _embed_text(text: str) -> List[float]:
     """Return a 768-dim embedding for *text* using sentence-transformers."""
     model = _get_sentence_model()
-    embedding = model.encode(text)
-    # Pad or truncate to 768 dimensions
-    if len(embedding) < 768:
-        # Pad with zeros
-        embedding = np.pad(embedding, (0, 768 - len(embedding)), 'constant')
-    elif len(embedding) > 768:
-        # Truncate
-        embedding = embedding[:768]
+    embedding = model.encode(text, convert_to_numpy=True, normalize_embeddings=False)
+    embedding = _l2_normalize(embedding)
     return embedding.tolist()
 
 def _embed_texts(texts: List[str]) -> np.ndarray:
     """Vectorise a list of *texts* → (n, 768) numpy array."""
     model = _get_sentence_model()
-    embeddings = model.encode(texts)
-    # Ensure all embeddings are 768 dimensions
-    if embeddings.shape[1] < 768:
-        # Pad with zeros
-        embeddings = np.pad(embeddings, ((0, 0), (0, 768 - embeddings.shape[1])), 'constant')
-    elif embeddings.shape[1] > 768:
-        # Truncate
-        embeddings = embeddings[:, :768]
-    return embeddings
+    embeddings = model.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
+    return _l2_normalize(embeddings)
 
 def _get_notebook_id(notebook_id: str) -> str:
     """Return the notebook_id as-is, handling 'default' case."""
@@ -164,7 +161,7 @@ class RAGPipeline:
         *,
         table_name: str = "chunks",
         max_tokens_per_chunk: int = 500,
-        similarity_threshold: float = 0.340,
+        similarity_threshold: float = 0.30,
         supabase_url: str | None = None,
         supabase_key: str | None = None,
         db_url: str | None = None
@@ -398,11 +395,22 @@ class RAGPipeline:
         # Generate embeddings for all chunks
         embeddings = _embed_texts([c.text for c in chunks])
         
-        # Prepare data for insertion (matching chunks table schema)
+        user_id = _get_user_id(user_id)
+        
+        # Try using direct PostgreSQL connection if available (better for VECTOR types)
+        if self.db_url:
+            try:
+                await asyncio.to_thread(self._store_chunks_via_db, chunks, embeddings, user_id)
+                self.logger.info(f"Successfully stored {len(chunks)} chunks via direct DB connection")
+                return
+            except Exception as e:
+                self.logger.warning(f"Direct DB connection failed, falling back to REST API: {e}")
+        
+        # Fallback: Use Supabase REST API
         data_to_insert = []
         for i, chunk in enumerate(chunks):
             data_to_insert.append({
-                "user_id": _get_user_id(user_id),
+                "user_id": user_id,
                 "notebook_id": _get_notebook_id(chunk.metadata.get("notebook_id", "default")),
                 "document_id": None,  # Will be set when document is created
                 "content": chunk.text,
@@ -415,10 +423,47 @@ class RAGPipeline:
         try:
             # Insert chunks into Supabase
             result = self.supabase.table(self.table_name).upsert(data_to_insert).execute()
-            self.logger.info(f"Successfully stored {len(chunks)} chunks")
+            self.logger.info(f"Successfully stored {len(chunks)} chunks via REST API")
         except Exception as e:
             self.logger.error(f"Failed to store chunks: {e}")
             raise
+    
+    def _store_chunks_via_db(self, chunks: List[Chunk], embeddings: np.ndarray, user_id: str) -> None:
+        """Store chunks using direct PostgreSQL connection (handles VECTOR types correctly)."""
+        import json
+        
+        with psycopg2.connect(self.db_url) as conn:
+            with conn.cursor() as cur:
+                for i, chunk in enumerate(chunks):
+                    notebook_id = _get_notebook_id(chunk.metadata.get("notebook_id", "default"))
+                    
+                    # Convert embedding to PostgreSQL vector format
+                    embedding_list = embeddings[i].tolist()
+                    embedding_str = '[' + ','.join([str(x) for x in embedding_list]) + ']'
+                    
+                    # Insert chunk with proper vector type
+                    cur.execute("""
+                        INSERT INTO chunks (
+                            user_id, notebook_id, document_id, content, 
+                            embedding, tokens, chunk_index, metadata
+                        ) VALUES (%s, %s, %s, %s, %s::vector(768), %s, %s, %s)
+                        ON CONFLICT (id) DO UPDATE SET
+                            content = EXCLUDED.content,
+                            embedding = EXCLUDED.embedding,
+                            tokens = EXCLUDED.tokens,
+                            metadata = EXCLUDED.metadata
+                    """, (
+                        user_id,
+                        notebook_id,
+                        None,  # document_id
+                        chunk.text,
+                        embedding_str,
+                        chunk.tokens,
+                        i,
+                        json.dumps(chunk.metadata)
+                    ))
+                
+                conn.commit()
 
     async def ingest_pdf(self, pdf: Union[str, bytes], *, notebook_id: str = "default", user_id: str = None) -> None:
         """Extract text and images from PDF, creating chunks, embedding and storing as vectors."""
@@ -511,47 +556,26 @@ class RAGPipeline:
 
     async def query(self, *, question: str, notebook_id: str = "default", top_k: int = 3, user_id: str = None) -> QueryResult:
         """
-        Retrieve top‑k chunks and answer the *question*.
+        Retrieve top‑k chunks and answer the *question* using pgvector native similarity search.
         """
         q_embed = _embed_text(question)
+        user_id = _get_user_id(user_id)
         
         try:
-            # Query Supabase for chunks filtered by notebook_id
-            query = self.supabase.table(self.table_name).select('*')
-            
-            # Filter by notebook_id if provided and not "default"
-            if notebook_id and notebook_id != "default":
-                query = query.eq('notebook_id', notebook_id)
-            elif notebook_id == "default":
-                # For default, get chunks with NULL notebook_id or specific default notebook
-                # First try to get the default notebook ID
+            # Use pgvector native similarity search if DB connection available
+            if self.db_url:
                 try:
-                    default_notebook_result = self.supabase.table('notebooks').select('id').eq('name', 'Default Notebook').execute()
-                    if default_notebook_result.data:
-                        default_notebook_id = default_notebook_result.data[0]['id']
-                        query = query.eq('notebook_id', default_notebook_id)
-                    else:
-                        # If no default notebook exists, get chunks with NULL notebook_id
-                        query = query.is_('notebook_id', 'null')
-                except Exception as e:
-                    print(f"Warning: Could not filter by notebook_id: {e}")
-                    # Fall back to getting all chunks
-                    pass
-            
-            result = query.execute()
-            results = result.data
-            
-            if not results:
-                return {"answer": "I couldn't find relevant material.", "chunks": []}
-            
-            # Calculate similarities and get top-k
-            docs = [item["content"] for item in results]
-            metas = [item["metadata"] for item in results]
-            ids = [item["id"] for item in results]
-            context = self.find_relevent_chunks(q_embed, docs, metas, ids)
+                    context = await self._query_with_pgvector(q_embed, notebook_id, top_k, user_id)
+                except Exception as pg_error:
+                    # If direct DB connection fails, fall back to REST API
+                    self.logger.warning(f"Direct DB connection failed ({pg_error}), falling back to REST API")
+                    context = await self._query_with_supabase_client(q_embed, notebook_id, top_k, user_id)
+            else:
+                # Fallback to Supabase client method
+                context = await self._query_with_supabase_client(q_embed, notebook_id, top_k, user_id)
                 
         except Exception as e:
-            self.logger.error(f"Failed to query Supabase: {e}")
+            self.logger.error(f"Failed to query: {e}")
             return {"answer": "I couldn't find relevant material.", "chunks": []}
         
         if not context:
@@ -588,30 +612,284 @@ Answer:"""
         
         return {"answer": answer, "chunks": chunks}
     
-
+    async def _query_with_pgvector(self, q_embed: List[float], notebook_id: str, top_k: int, user_id: str) -> List[tuple[str, dict, str]]:
+        """Use pgvector native similarity search for fast, accurate retrieval."""
+        try:
+            with psycopg2.connect(self.db_url) as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Build notebook filter
+                    notebook_filter = ""
+                    notebook_params = []
+                    
+                    if notebook_id and notebook_id != "default":
+                        notebook_filter = "AND c.notebook_id = %s"
+                        notebook_params = [notebook_id]
+                    elif notebook_id == "default":
+                        try:
+                            default_notebook_result = self.supabase.table('notebooks').select('id').eq('name', 'Default Notebook').execute()
+                            if default_notebook_result.data:
+                                default_notebook_id = default_notebook_result.data[0]['id']
+                                notebook_filter = "AND c.notebook_id = %s"
+                                notebook_params = [default_notebook_id]
+                            else:
+                                notebook_filter = "AND c.notebook_id IS NULL"
+                        except Exception:
+                            notebook_filter = "AND c.notebook_id IS NULL"
+                    
+                    # Use pgvector cosine similarity (<=> operator)
+                    # 1 - (embedding <=> query) gives cosine similarity
+                    # Get top-k results sorted by similarity
+                    sql = f"""
+                        SELECT 
+                            c.id,
+                            c.content,
+                            c.metadata,
+                            c.tokens,
+                            1 - (c.embedding <=> %s::vector) as similarity
+                        FROM {self.table_name} c
+                        WHERE c.user_id = %s
+                            AND c.embedding IS NOT NULL
+                            {notebook_filter}
+                            AND (1 - (c.embedding <=> %s::vector)) >= %s
+                        ORDER BY c.embedding <=> %s::vector
+                        LIMIT %s
+                    """
+                    
+                    params = [q_embed, user_id] + notebook_params + [q_embed, self.similarity_threshold, q_embed, top_k * 2]
+                    
+                    cur.execute(sql, params)
+                    results = cur.fetchall()
+                    
+                    if not results:
+                        print(f"No chunks found with similarity >= {self.similarity_threshold}")
+                        return []
+                    
+                    # Convert to expected format
+                    context = []
+                    for row in results[:top_k]:
+                        similarity = float(row['similarity'])
+                        print(f"✓ Chunk accepted (similarity: {similarity:.3f}): {row['content'][:100]}...")
+                        context.append((
+                            row['content'],
+                            row['metadata'] or {},
+                            str(row['id'])
+                        ))
+                    
+                    print(f"\n📊 Found {len(context)} chunks using pgvector native search")
+                    return context
+                    
+        except Exception as e:
+            self.logger.error(f"pgvector query failed: {e}")
+            raise
+    
+    async def _query_with_supabase_client(self, q_embed: List[float], notebook_id: str, top_k: int, user_id: str) -> List[tuple[str, dict, str]]:
+        """Fallback query method using Supabase client."""
+        try:
+            # Query Supabase for chunks filtered by notebook_id and user_id
+            query = self.supabase.table(self.table_name).select('id, content, metadata, tokens, embedding, user_id, notebook_id')
+            
+            # Filter by user_id
+            query = query.eq('user_id', user_id)
+            
+            # Filter by notebook_id if provided and not "default"
+            if notebook_id and notebook_id != "default":
+                query = query.eq('notebook_id', notebook_id)
+            elif notebook_id == "default":
+                try:
+                    default_notebook_result = self.supabase.table('notebooks').select('id').eq('name', 'Default Notebook').execute()
+                    if default_notebook_result.data:
+                        default_notebook_id = default_notebook_result.data[0]['id']
+                        query = query.eq('notebook_id', default_notebook_id)
+                    else:
+                        query = query.is_('notebook_id', 'null')
+                except Exception as e:
+                    print(f"Warning: Could not filter by notebook_id: {e}")
+                    pass
+            
+            # Only get chunks that have embeddings
+            query = query.not_.is_('embedding', 'null')
+            
+            result = query.execute()
+            results = result.data
+            
+            if not results:
+                return []
+            
+            # Extract data and parse embeddings
+            docs = [item["content"] for item in results]
+            metas = [item.get("metadata", {}) for item in results]
+            ids = [item["id"] for item in results]
+            
+            # Parse embeddings
+            stored_embeddings = []
+            for item in results:
+                embedding = item.get("embedding")
+                if embedding is None:
+                    stored_embeddings.append(None)
+                elif isinstance(embedding, str):
+                    try:
+                        stored_embeddings.append(json.loads(embedding))
+                    except (json.JSONDecodeError, TypeError):
+                        try:
+                            stored_embeddings.append(ast.literal_eval(embedding))
+                        except (ValueError, SyntaxError):
+                            stored_embeddings.append(None)
+                elif isinstance(embedding, list):
+                    stored_embeddings.append(embedding)
+                else:
+                    stored_embeddings.append(None)
+            
+            # Filter by similarity using stored embeddings
+            return self.find_relevent_chunks(q_embed, docs, metas, ids, stored_embeddings=stored_embeddings)
+            
+        except Exception as e:
+            self.logger.error(f"Supabase client query failed: {e}")
+            raise
 
     def find_relevent_chunks(self, query_embedding: List[float], documents: List[str], 
-                    metadatas: List[dict], ids: List[str]) -> List[tuple[str, dict, str]]:
-        """Filter chunks based on cosine similarity with the query."""
-
-        relevant_chunks = []
-        print("\nCalculating similarity scores...")
+                    metadatas: List[dict], ids: List[str], stored_embeddings: List[List[float]] = None) -> List[tuple[str, dict, str]]:
+        """Filter chunks based on cosine similarity with the query using stored embeddings."""
         
-        for doc, meta, id_ in zip(documents, metadatas, ids):
-            # Calculate cosine similarity between question and chunk
-            doc_embed = _embed_text(doc)
-            similarity = np.dot(query_embedding, doc_embed) / (
-                np.linalg.norm(query_embedding) * np.linalg.norm(doc_embed)
-            )
+        relevant_chunks = []
+        similarity_scores = []  # Track all scores for debugging
+        print("\nCalculating similarity scores using stored embeddings...")
+        
+        # Convert query embedding to numpy for efficient computation
+        q_embed_np = np.array(query_embedding, dtype=np.float32)
+        
+        # Always normalize query embedding (ensures consistency)
+        q_norm = np.linalg.norm(q_embed_np)
+        if q_norm > 1e-8:  # Avoid division by very small numbers
+            q_embed_np = q_embed_np / q_norm
+        else:
+            self.logger.error("Query embedding has zero norm!")
+            return []
+        
+        # Debug: Check query embedding norm (should be ~1.0 after normalization)
+        if abs(q_norm - 1.0) > 0.01:
+            print(f"Debug: Query embedding norm after normalization: {np.linalg.norm(q_embed_np):.6f}")
+        
+        # Expected embedding dimension for current model (all-mpnet-base-v2 = 768)
+        EXPECTED_DIM = 768
+        
+        # First pass: Check how many chunks need re-embedding
+        mismatches = 0
+        embedding_dims = []
+        if stored_embeddings:
+            for idx, emb in enumerate(stored_embeddings[:min(10, len(stored_embeddings))]):  # Sample first 10
+                if emb and isinstance(emb, (list, tuple)):
+                    try:
+                        emb_array = np.array(emb, dtype=np.float32)
+                        dim = len(emb_array)
+                        embedding_dims.append(dim)
+                        if dim != EXPECTED_DIM:
+                            mismatches += 1
+                    except:
+                        pass
+        
+        # Debug: Report embedding dimensions found
+        if embedding_dims:
+            unique_dims = set(embedding_dims)
+            print(f"Debug: Found embedding dimensions in sample: {unique_dims} (expected: {EXPECTED_DIM})")
+            if mismatches > 0:
+                print(f"Debug: {mismatches} out of {len(embedding_dims)} sampled chunks have wrong dimension")
+        
+        # If most chunks have mismatches, batch re-embed for efficiency
+        if mismatches > 5 and len(documents) > 10:
+            print(f"Detected {mismatches} dimension mismatches in sample. Batch re-embedding all chunks for accuracy...")
+            # Batch re-embed all documents
+            doc_embeddings = _embed_texts(documents)
+            stored_embeddings = [emb.tolist() for emb in doc_embeddings]
+        
+        for idx, (doc, meta, id_) in enumerate(zip(documents, metadatas, ids)):
+            # Check if we should use stored embedding or re-embed
+            should_reembed = False
+            doc_embed = None
+            
+            if stored_embeddings and idx < len(stored_embeddings) and stored_embeddings[idx]:
+                # Ensure embedding is a list/array before converting
+                if isinstance(stored_embeddings[idx], (list, tuple)):
+                    try:
+                        doc_embed = np.array(stored_embeddings[idx], dtype=np.float32)
+                        
+                        # Check dimension - if it doesn't match expected, re-embed
+                        # This handles cases where old chunks used different models
+                        if len(doc_embed) != EXPECTED_DIM:
+                            should_reembed = True
+                            if idx < 3:  # Debug first few
+                                print(f"Debug: Chunk {idx} has dimension {len(doc_embed)}, expected {EXPECTED_DIM}, re-embedding...")
+                        elif len(doc_embed) != len(q_embed_np):
+                            # Dimension mismatch with query - re-embed to be safe
+                            should_reembed = True
+                            if idx < 3:
+                                print(f"Debug: Chunk {idx} dimension {len(doc_embed)} != query {len(q_embed_np)}, re-embedding...")
+                                
+                    except (ValueError, TypeError) as e:
+                        should_reembed = True
+                        if idx < 3:
+                            print(f"Warning: Failed to convert embedding for chunk {idx}: {e}, re-embedding...")
+                else:
+                    should_reembed = True
+                    if idx < 3:
+                        print(f"Warning: Invalid embedding format for chunk {idx}, re-embedding...")
+            else:
+                should_reembed = True
+                if idx < 3:
+                    print(f"Warning: No stored embedding for chunk {idx}, re-embedding...")
+            
+            # Re-embed if needed (ensures same model is used)
+            if should_reembed:
+                doc_embed = np.array(_embed_text(doc), dtype=np.float32)
+            else:
+                # Use stored embedding - ensure it matches query dimension exactly
+                if len(doc_embed) != len(q_embed_np):
+                    # Final safety check - re-embed if dimensions still don't match
+                    doc_embed = np.array(_embed_text(doc), dtype=np.float32)
+            
+            # Normalize document embedding (always normalize to ensure consistency)
+            doc_norm_before = np.linalg.norm(doc_embed)
+            if doc_norm_before > 1e-8:  # Avoid division by very small numbers
+                doc_embed = doc_embed / doc_norm_before
+                doc_norm_after = np.linalg.norm(doc_embed)
+            else:
+                # Embedding is essentially zero, skip this chunk
+                print(f"Warning: Zero or near-zero embedding for chunk {idx} (norm={doc_norm_before:.6f}), skipping...")
+                continue
+            
+            # Cosine similarity: dot product of normalized vectors
+            # Both vectors should be normalized, so dot product gives cosine similarity
+            similarity = float(np.dot(q_embed_np, doc_embed))
+            
+            # Clamp similarity to [-1, 1] range (should already be in this range for normalized vectors)
+            similarity = max(-1.0, min(1.0, similarity))
+            similarity_scores.append(similarity)
+            
+            # Debug output for first few chunks
+            if idx < 3:
+                print(f"Debug chunk {idx}: doc_dim={len(doc_embed)}, doc_norm_before={doc_norm_before:.6f}, doc_norm_after={doc_norm_after:.6f}, similarity={similarity:.6f}")
             
             # Print similarity score for debugging
             print(f"\n  Chunk preview: {doc[:100]}...")
             
-            if similarity > self.similarity_threshold:
+            if similarity >= self.similarity_threshold:
                 relevant_chunks.append((doc, meta, id_))
                 print(f"✓ Chunk accepted (similarity: {similarity:.3f})")
             else:
                 print(f"✗ Chunk rejected (similarity: {similarity:.3f})")
+        
+        # Print summary of similarity scores
+        if similarity_scores:
+            scores_array = np.array(similarity_scores)
+            print(f"\n📊 Similarity Score Summary:")
+            print(f"   Total chunks: {len(similarity_scores)}")
+            print(f"   Accepted (≥{self.similarity_threshold:.3f}): {len(relevant_chunks)}")
+            print(f"   Rejected: {len(similarity_scores) - len(relevant_chunks)}")
+            print(f"   Score range: [{scores_array.min():.3f}, {scores_array.max():.3f}]")
+            print(f"   Mean score: {scores_array.mean():.3f}")
+            print(f"   Median score: {np.median(scores_array):.3f}")
+            if len(similarity_scores) > 0:
+                top_5_indices = np.argsort(scores_array)[-5:][::-1]
+                print(f"   Top 5 scores: {[f'{scores_array[i]:.3f}' for i in top_5_indices]}")
                 
         return relevant_chunks
 

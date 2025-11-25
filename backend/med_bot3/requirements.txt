@@ -31,3 +31,6 @@ PyPDF2
 flask
 jinja2
 python-multipart
+sentence-transformers
+tqdm
+python-dotenv

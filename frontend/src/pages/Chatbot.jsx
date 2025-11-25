@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Calendar, Clock, FileText, Paperclip, Upload } from 'lucide-react';
 import React, { useEffect, useRef, useState, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { API_ENDPOINTS } from '../config';
 import Exam from './Exam';
 import Flashcards from './Flashcards';
@@ -729,7 +730,8 @@ function Chatbot({
   isExamSettingsClosing: propIsExamSettingsClosing,
   setIsExamSettingsClosing: propSetIsExamSettingsClosing,
   isExamFullscreen: propIsExamFullscreen,
-  setIsExamFullscreen: propSetIsExamFullscreen
+  setIsExamFullscreen: propSetIsExamFullscreen,
+  currentNotebookId: propCurrentNotebookId
 }) {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -760,13 +762,16 @@ function Chatbot({
   const [supabaseFiles, setSupabaseFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   
-  // State for notebook management
-  const [currentNotebookId, setCurrentNotebookId] = useState(null);
+  // State for notebook management (use props if provided, otherwise use local state)
+  const [currentNotebookId, setCurrentNotebookId] = useState(propCurrentNotebookId || null);
   const [currentNotebookName, setCurrentNotebookName] = useState('Default Notebook');
-  const [isCreatingNewChat, setIsCreatingNewChat] = useState(false);
-  const [newChatNotebookName, setNewChatNotebookName] = useState('');
-  const [availableNotebooks, setAvailableNotebooks] = useState([]);
-  const [isNewChatDropdownOpen, setIsNewChatDropdownOpen] = useState(false);
+  
+  // Update local state when prop changes
+  useEffect(() => {
+    if (propCurrentNotebookId !== undefined) {
+      setCurrentNotebookId(propCurrentNotebookId);
+    }
+  }, [propCurrentNotebookId]);
   
   // Study Planner states
   const [studyPlannerStep, setStudyPlannerStep] = useState('input'); // 'input', 'upload', 'loading', 'calendar'
@@ -1133,106 +1138,114 @@ function Chatbot({
     fetchUserFiles();
   }, []);
 
-  // Load available notebooks
-  const loadAvailableNotebooks = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.id) return;
-
-      const { data: notebooks } = await supabase
-        .from('notebooks')
-        .select('id, name, created_at')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      setAvailableNotebooks(notebooks || []);
-    } catch (error) {
-      console.error('Error loading notebooks:', error);
-    }
-  };
-
-  // Initialize default notebook on mount
+  // Initialize notebook from prop if provided, otherwise use default
   useEffect(() => {
-    const initializeDefaultNotebook = async () => {
-      const notebook = await getOrCreateNotebook('Default Notebook');
-      if (notebook) {
-        setCurrentNotebookId(notebook.id);
-        setCurrentNotebookName(notebook.name);
+    const initializeNotebook = async () => {
+      if (propCurrentNotebookId) {
+        // Use notebook from parent
+        setCurrentNotebookId(propCurrentNotebookId);
+        // Fetch notebook name
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            const { data: notebook } = await supabase
+              .from('notebooks')
+              .select('name')
+              .eq('id', propCurrentNotebookId)
+              .eq('user_id', user.id)
+              .single();
+            if (notebook) {
+              setCurrentNotebookName(notebook.name);
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching notebook name:', error);
+        }
+      } else {
+        // Fallback: create default notebook if no prop provided
+        const notebook = await getOrCreateNotebook('Default Notebook');
+        if (notebook) {
+          setCurrentNotebookId(notebook.id);
+          setCurrentNotebookName(notebook.name);
+        }
       }
-      // Load all available notebooks
-      await loadAvailableNotebooks();
     };
-    initializeDefaultNotebook();
-  }, []);
+    initializeNotebook();
+  }, [propCurrentNotebookId]);
 
-  // Handle new chat creation
+  // Handle new chat creation - now handled by parent (Home.jsx)
   const handleNewChat = () => {
-    if (availableNotebooks.length > 0) {
-      setIsNewChatDropdownOpen(true);
-    } else {
-      setIsCreatingNewChat(true);
-      setNewChatNotebookName('');
-    }
+    // Parent handles notebook switching, do nothing here
+    return;
   };
-
-  // Create new notebook and start new chat
-  const createNewChat = async () => {
-    if (!newChatNotebookName.trim()) {
-      alert('Please enter a notebook name');
-      return;
-    }
-
-    try {
-      const notebook = await getOrCreateNotebook(newChatNotebookName.trim());
-      if (notebook) {
-        // Reset chat state
-        setMessages([]);
-        setInputMessage('');
-        setCurrentNotebookId(notebook.id);
-        setCurrentNotebookName(notebook.name);
-        setSupabaseFiles([]);
-        setUploadedFiles([]);
-        
-        // Close new chat modal
-        setIsCreatingNewChat(false);
-        setNewChatNotebookName('');
-        
-        // Fetch files for new notebook
-        await fetchUserFiles();
-        
-        // Refresh available notebooks list
-        await loadAvailableNotebooks();
-      }
-    } catch (error) {
-      console.error('Error creating new chat:', error);
-      alert('Failed to create new chat');
-    }
-  };
-
-  // Cancel new chat creation
-  const cancelNewChat = () => {
-    setIsCreatingNewChat(false);
-    setNewChatNotebookName('');
-  };
-
-  // Switch to a different notebook
-  const switchToNotebook = async (notebook) => {
-    try {
-      // Reset chat state
+  
+  // Handle notebook switch from parent
+  useEffect(() => {
+    if (propCurrentNotebookId && propCurrentNotebookId !== currentNotebookId) {
+      console.log('Notebook switching from', currentNotebookId, 'to', propCurrentNotebookId);
+      
+      // Reset chat state when notebook changes
       setMessages([]);
       setInputMessage('');
-      setCurrentNotebookId(notebook.id);
-      setCurrentNotebookName(notebook.name);
       setSupabaseFiles([]);
       setUploadedFiles([]);
       
-      // Fetch files for the selected notebook
-      await fetchUserFiles();
-    } catch (error) {
-      console.error('Error switching to notebook:', error);
-      alert('Failed to switch notebook');
+      // Update current notebook
+      setCurrentNotebookId(propCurrentNotebookId);
+      
+      // Fetch notebook name and files
+      const fetchNotebookData = async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            // Fetch notebook name
+            const { data: notebook } = await supabase
+              .from('notebooks')
+              .select('name')
+              .eq('id', propCurrentNotebookId)
+              .eq('user_id', user.id)
+              .single();
+            if (notebook) {
+              setCurrentNotebookName(notebook.name);
+            }
+            
+            // Fetch files for the new notebook using propCurrentNotebookId directly
+            const { data: documents, error } = await supabase
+              .from('documents')
+              .select('id, filename, original_filename, file_type, file_size, created_at, processing_status')
+              .eq('user_id', user.id)
+              .eq('notebook_id', propCurrentNotebookId)
+              .order('created_at', { ascending: false });
+
+            if (error) {
+              console.error('Error fetching documents:', error);
+              setSupabaseFiles([]);
+              return;
+            }
+
+            // Transform documents to match the expected format
+            const transformedFiles = documents.map(doc => ({
+              id: doc.id,
+              name: doc.original_filename || doc.filename,
+              filename: doc.original_filename || doc.filename,
+              size: doc.file_size || 0,
+              type: doc.file_type || 'unknown',
+              supabaseDocument: true,
+              status: doc.processing_status,
+              uploadedAt: doc.created_at
+            }));
+
+            console.log('Fetched files for new notebook:', transformedFiles);
+            setSupabaseFiles(transformedFiles);
+          }
+        } catch (error) {
+          console.error('Error fetching notebook data:', error);
+        }
+      };
+      
+      fetchNotebookData();
     }
-  };
+  }, [propCurrentNotebookId, currentNotebookId]);
 
   const handleStop = () => {
     // Stop ongoing API request
@@ -1298,14 +1311,64 @@ function Chatbot({
       setFlashcards(prev => [...prev, placeholderFlashcard]);
       setIsLoading(true);
 
-      // Use the most recently uploaded file from Supabase
-      console.log('Available Supabase files:', supabaseFiles);
-      const latestFile = supabaseFiles.length > 0 ? supabaseFiles[supabaseFiles.length - 1].filename : null;
-      console.log('Latest file for flashcards:', latestFile);
+      // Fetch fresh files for the current notebook
+      console.log('Fetching fresh files for current notebook...');
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user?.id) {
+        setFlashcards(prev => prev.map(card =>
+          card.isLoading ? { ...card, question: 'Not logged in.', answer: 'Please log in first.', isLoading: false } : card
+        ));
+        setIsLoading(false);
+        return;
+      }
+
+      // Fetch documents for this user and notebook
+      const { data: documents, error } = await supabase
+        .from('documents')
+        .select('id, filename, original_filename, file_type, file_size, created_at, processing_status')
+        .eq('user_id', user.id)
+        .eq('notebook_id', currentNotebookId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching documents:', error);
+        setFlashcards(prev => prev.map(card =>
+          card.isLoading ? { ...card, question: 'Error loading files.', answer: 'Please try again.', isLoading: false } : card
+        ));
+        setIsLoading(false);
+        return;
+      }
+
+      // Transform documents to match the expected format
+      const transformedFiles = documents.map(doc => ({
+        id: doc.id,
+        name: doc.original_filename || doc.filename,
+        filename: doc.original_filename || doc.filename,
+        size: doc.file_size || 0,
+        type: doc.file_type || 'unknown',
+        supabaseDocument: true,
+        status: doc.processing_status,
+        uploadedAt: doc.created_at
+      }));
+
+      console.log('Fresh files for current notebook:', transformedFiles);
+      console.log('File statuses:', transformedFiles.map(f => ({ name: f.filename, status: f.status })));
+      console.log('Current notebook ID:', currentNotebookId);
+      
+      // Filter for files that have been processed (processing_status: 'completed')
+      const processedFiles = transformedFiles.filter(file => file.status === 'completed');
+      console.log('Processed files:', processedFiles);
+      console.log('Processed file details:', processedFiles.map(f => ({ name: f.filename, status: f.status })));
+      
+      // Select the most recent processed file
+      const latestFile = processedFiles.length > 0 ? processedFiles[processedFiles.length - 1].filename : null;
+      console.log('Latest processed file for flashcards:', latestFile);
+      console.log('Selected file will be sent to backend:', latestFile);
       
       if (!latestFile) {
         setFlashcards(prev => prev.map(card =>
-          card.isLoading ? { ...card, question: 'No file uploaded.', answer: 'Please upload a document first.', isLoading: false } : card
+          card.isLoading ? { ...card, question: 'No processed files found.', answer: 'Please upload and process a document first.', isLoading: false } : card
         ));
         setIsLoading(false);
         return;
@@ -1444,7 +1507,10 @@ function Chatbot({
             for (const line of lines) {
               if (line.startsWith('data: ')) {
                 try {
-                  const update = JSON.parse(line.slice(6));
+                  const jsonStr = line.slice(6);
+                  console.log('Parsing SSE line:', jsonStr.substring(0, 200)); // Log first 200 chars
+                  const update = JSON.parse(jsonStr);
+                  console.log('Parsed update type:', update.type, 'Has videos:', !!update.videos, 'Videos count:', update.videos?.length);
                   
                   if (update.type === 'stream_complete') {
                     // Stream is complete, break out of the loop
@@ -1453,6 +1519,13 @@ function Chatbot({
                     throw new Error(update.message);
                   } else if (update.type === 'query_complete') {
                     finalAnswer = update.answer;
+                    // Extract videos from the update if available
+                    if (update.videos && Array.isArray(update.videos)) {
+                      finalVideos = update.videos;
+                      console.log('✅ Received videos from stream:', finalVideos.length, 'videos:', finalVideos);
+                    } else {
+                      console.log('❌ No videos in query_complete update. Update keys:', Object.keys(update));
+                    }
                     
                     // Add final completion thinking message
                     const completionMessage = {
@@ -1578,12 +1651,14 @@ function Chatbot({
 
       if (response.ok) {
         // Add bot response to chat with typing indicator
+        const videos = Array.isArray(data.videos) ? data.videos : [];
+        console.log('Adding bot message with videos:', videos.length, videos);
         const botMessage = {
           type: 'bot',
           content: data.answer || data.response || '',
           timestamp: new Date().toISOString(),
           isNew: true,
-          videos: Array.isArray(data.videos) ? data.videos : []
+          videos: videos
         };
         setMessages(prev => [...prev, botMessage]);
 
@@ -1671,6 +1746,46 @@ function Chatbot({
       setAbortController(null);
       // Clean up streaming state
       setIsStreaming(false);
+    }
+  };
+
+  // Function to reprocess a document that doesn't have chunks
+  const reprocessDocument = async (documentId) => {
+    try {
+      console.log('Reprocessing document:', documentId);
+      
+      // Get user info
+      let userId = 'web-user';
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.id) {
+          userId = user.id;
+        }
+      } catch (_) {}
+
+      const response = await fetch('/api/reprocess-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id: documentId,
+          user_id: userId
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok) {
+        console.log('Document reprocessed successfully:', data.message);
+        // Refresh the files list to show updated status
+        await fetchUserFiles();
+        return { success: true, message: data.message };
+      } else {
+        console.error('Reprocess error:', data.error);
+        return { success: false, error: data.error };
+      }
+    } catch (error) {
+      console.error('Reprocess document error:', error);
+      return { success: false, error: error.message };
     }
   };
 
@@ -1797,6 +1912,13 @@ function Chatbot({
         const { data: { user: backendUser } } = await supabase.auth.getUser();
         if (backendUser?.id) {
           formData.append('user_id', backendUser.id);
+        }
+        // Include notebook_id so chunks are stored under the correct notebook
+        if (currentNotebookId) {
+          formData.append('notebook_id', currentNotebookId);
+          console.log('Uploading file with notebook_id:', currentNotebookId);
+        } else {
+          console.warn('No currentNotebookId set, backend will use default notebook');
         }
       } catch (_) {}
       const response = await fetch(API_ENDPOINTS.UPLOAD, {
@@ -2133,18 +2255,8 @@ function Chatbot({
       {/* Top bar: Menu Button and Mode Selector */}
       <div className="px-8 py-4 bg-white/50 backdrop-blur-sm border-b border-gray-100/50">
         <div className="max-w-4xl mx-auto flex justify-between items-center">
-          {/* Left side: New Chat button */}
-          <button
-            onClick={handleNewChat}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-black/10 shadow-sm text-sm bg-white/90 border-gray-200/60 text-gray-700 hover:bg-white hover:border-gray-300/80 hover:shadow-md"
-          >
-            <div className="flex items-center justify-center w-6 h-6 bg-blue-100/60 rounded-lg">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-blue-500">
-                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </div>
-            <span className="font-medium text-sm">New Chat</span>
-          </button>
+          {/* Left side: New Chat button - removed, handled by sidebar */}
+          <div></div>
           
           {/* Center: Mode Selector */}
           <div className="flex items-center gap-4">
@@ -2222,6 +2334,8 @@ function Chatbot({
                   format={examConfig.format}
                   uploadedFiles={uploadedFiles}
                   exampleExamFilename={exampleExamFilename}
+                  notebookId={currentNotebookId}
+                  userId={null}
                   onPromptProcessed={() => {
                     // Optionally handle when prompt is processed
                   }}
@@ -2723,10 +2837,22 @@ function Chatbot({
                     }`}>
                       <div className="w-full bg-gray-50/50 border-y border-gray-100/50 py-6 -mx-8 px-8">
                         <div className="max-w-3xl mx-auto">
-                          <div className="text-sm leading-relaxed whitespace-pre-wrap text-gray-900">{message.content}</div>
+                          <div className="text-sm leading-relaxed text-gray-900 prose prose-sm max-w-none 
+                            prose-headings:font-semibold prose-headings:text-gray-900 prose-headings:mt-4 prose-headings:mb-2
+                            prose-p:text-gray-900 prose-p:my-2 prose-p:leading-relaxed
+                            prose-strong:text-gray-900 prose-strong:font-semibold
+                            prose-ul:my-3 prose-ul:list-disc prose-ul:pl-6 prose-ul:space-y-1
+                            prose-ol:my-3 prose-ol:list-decimal prose-ol:pl-6 prose-ol:space-y-1
+                            prose-li:my-1 prose-li:text-gray-900 prose-li:leading-relaxed
+                            prose-code:text-gray-900 prose-code:bg-gray-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-mono
+                            prose-pre:bg-gray-100 prose-pre:p-3 prose-pre:rounded-lg prose-pre:overflow-x-auto prose-pre:my-3
+                            prose-blockquote:border-l-4 prose-blockquote:border-gray-300 prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-gray-700
+                            prose-hr:my-4 prose-hr:border-gray-200">
+                            <ReactMarkdown>{message.content}</ReactMarkdown>
+                          </div>
                           
                           {/* YouTube Videos Section */}
-                          {message.videos && message.videos.length > 0 && (
+                          {message.videos && Array.isArray(message.videos) && message.videos.length > 0 && (
                             <div className="mt-6 pt-4 border-t border-gray-200">
                               <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-red-500">
@@ -3232,19 +3358,40 @@ function Chatbot({
                         )}
                       </p>
                     </div>
-                    {!file.supabaseDocument && (
-                    <button
-                      onClick={() => {
-                        setUploadedFiles(prev => prev.filter(f => f.id !== file.id));
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all duration-200"
-                      title="Remove file"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-current">
-                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                      </svg>
-                </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {file.supabaseDocument && (
+                        <button
+                          onClick={async () => {
+                            const result = await reprocessDocument(file.id);
+                            if (result.success) {
+                              alert(`Document reprocessed successfully: ${result.message}`);
+                            } else {
+                              alert(`Failed to reprocess document: ${result.error}`);
+                            }
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all duration-200"
+                          title="Reprocess document for flashcards"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-current">
+                            <path d="M1 4v6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                      )}
+                      {!file.supabaseDocument && (
+                        <button
+                          onClick={() => {
+                            setUploadedFiles(prev => prev.filter(f => f.id !== file.id));
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all duration-200"
+                          title="Remove file"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-current">
+                            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
               </div>
                 ))}
             </div>
@@ -3253,110 +3400,6 @@ function Chatbot({
         </div>
       )}
 
-      {/* New Chat Dropdown */}
-      {isNewChatDropdownOpen && (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center">
-          <div 
-            className="fixed inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setIsNewChatDropdownOpen(false)}
-          />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200/40 p-6 w-full max-w-md mx-4">
-            <div className="text-center">
-              <div className="flex items-center justify-center w-12 h-12 bg-blue-50 rounded-xl mx-auto mb-4">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-blue-500">
-                  <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Choose Notebook</h3>
-              <p className="text-gray-600 mb-6">Select an existing notebook or create a new one.</p>
-              
-              <div className="space-y-3 mb-6 max-h-60 overflow-y-auto">
-                {availableNotebooks.map((notebook) => (
-                  <button
-                    key={notebook.id}
-                    onClick={() => {
-                      setIsNewChatDropdownOpen(false);
-                      switchToNotebook(notebook);
-                    }}
-                    className={`w-full text-left p-3 rounded-xl border transition-colors ${
-                      notebook.id === currentNotebookId
-                        ? 'border-blue-200 bg-blue-50 text-blue-900'
-                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="font-medium">{notebook.name}</div>
-                    <div className="text-sm text-gray-500">
-                      {new Date(notebook.created_at).toLocaleDateString()}
-                    </div>
-                  </button>
-                ))}
-              </div>
-              
-              <button
-                onClick={() => {
-                  setIsNewChatDropdownOpen(false);
-                  setIsCreatingNewChat(true);
-                  setNewChatNotebookName('');
-                }}
-                className="w-full px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors font-medium"
-              >
-                Create New Notebook
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Chat Modal */}
-      {isCreatingNewChat && (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center">
-          <div 
-            className="fixed inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={cancelNewChat}
-          />
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200/40 p-6 w-full max-w-md mx-4">
-            <div className="text-center">
-              <div className="flex items-center justify-center w-12 h-12 bg-blue-50 rounded-xl mx-auto mb-4">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-blue-500">
-                  <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Create New Chat</h3>
-              <p className="text-gray-600 mb-6">Enter a name for your new notebook to start a fresh conversation.</p>
-              
-              <input
-                type="text"
-                value={newChatNotebookName}
-                onChange={(e) => setNewChatNotebookName(e.target.value)}
-                placeholder="e.g., Biology Study, Math Problems, History Notes"
-                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    createNewChat();
-                  }
-                }}
-                autoFocus
-              />
-              
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={cancelNewChat}
-                  className="flex-1 px-4 py-3 text-gray-600 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={createNewChat}
-                  disabled={!newChatNotebookName.trim()}
-                  className="flex-1 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium"
-                >
-                  Create Chat
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Dropdown Menu - Rendered at root level to appear above backdrop */}
       {(isDropdownOpen || isFilesDropdownOpen || isExamSettingsOpen || isModelSelectorOpen || isDropdownClosing || isFilesDropdownClosing || isModelSelectorClosing) && (
