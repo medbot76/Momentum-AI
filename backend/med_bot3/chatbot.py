@@ -137,8 +137,9 @@ class ChatBot:
         # Initialize speech recognition
         self.recognizer = sr.Recognizer()
 
-        # Conversation history for prompt chaining
-        self.conversation_history = []
+          # Conversation history for prompt chaining (scoped per notebook)
+          # { notebook_id: [ {question, answer}, ... ] }
+        self.conversation_history_by_notebook = {}
         self.MAX_HISTORY = 2
         # Track last main topic for video search context
         self.last_main_topic = None
@@ -197,9 +198,20 @@ class ChatBot:
         keywords = [word for word in words if word not in self.STOPWORDS]
         return " ".join(keywords)
 
-    def is_followup_query(self, query):
-        # Use conversation history to improve follow-up detection
-        if not self.conversation_history:
+    def is_followup_query(self, query, notebook_id: str | None = None):
+        """
+        Determine if a query is a follow-up, scoped to a specific notebook.
+        This prevents follow-up detection from leaking across notebooks.
+        """
+        history = []
+        if notebook_id is not None:
+            history = self.conversation_history_by_notebook.get(notebook_id, [])
+        # Fallback to any history if notebook-specific history is empty
+        if not history and hasattr(self, "conversation_history_by_notebook"):
+            # Flatten all histories (used only as last resort)
+            for entries in self.conversation_history_by_notebook.values():
+                history.extend(entries)
+        if not history:
             return False
 
         followup_words = {"it", "this", "that", "them", "those", "these", "its", "their", "his", "her"}
@@ -222,8 +234,8 @@ class ChatBot:
         if len(q.split()) <= 4:
             return True
 
-        # 4. Keyword overlap with last question
-        last_question = self.conversation_history[-1]['question']
+        # 4. Keyword overlap with last question (use last entry from scoped history)
+        last_question = history[-1]['question']
         query_keywords = set(self.extract_keywords(query).split())
         last_keywords = set(self.extract_keywords(last_question).split())
         if query_keywords and last_keywords:
@@ -571,14 +583,14 @@ class ChatBot:
                 print("\nNo relevant information found in your uploaded documents. Using general knowledge to answer...")
                 context = ""
 
-            # Build conversation history string
-            conversation_history = "\n".join([
-                f"Q: {entry['question']}\nA: {entry['answer']}" 
-                for entry in self.conversation_history
-            ])
+            # Build conversation history string scoped to this notebook
+            history = self.conversation_history_by_notebook.get(notebook_id, [])
+            conversation_history = "\n".join(
+                [f"Q: {entry['question']}\nA: {entry['answer']}" for entry in history]
+            )
 
-            # --- Video search context logic ---
-            is_followup = self.is_followup_query(question)
+            # --- Video search context logic (also scoped to this notebook) ---
+            is_followup = self.is_followup_query(question, notebook_id=notebook_id)
             if not is_followup:
                 video_search_query = self.extract_keywords(question)
                 self.last_main_topic = question
@@ -599,10 +611,12 @@ class ChatBot:
 
             answer, video_results = await asyncio.gather(llm_task, video_results_task)
             video_results = [result for result in video_results if not isinstance(result, Exception)]
-            # Update conversation history
-            self.conversation_history.append({"question": question, "answer": answer})
-            if len(self.conversation_history) > self.MAX_HISTORY:
-                self.conversation_history = self.conversation_history[-self.MAX_HISTORY:]
+            # Update conversation history for this notebook only
+            history = self.conversation_history_by_notebook.get(notebook_id, [])
+            history.append({"question": question, "answer": answer})
+            if len(history) > self.MAX_HISTORY:
+                history = history[-self.MAX_HISTORY:]
+            self.conversation_history_by_notebook[notebook_id] = history
 
             return {
                 "answer": answer,

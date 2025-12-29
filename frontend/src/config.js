@@ -1,11 +1,23 @@
 // Configuration for API endpoints
 const getApiBaseUrl = () => {
+  // Check for environment variable first (for production/EC2)
+  if (import.meta?.env?.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  
   // Check if we're running in Replit environment
   if (window.location.hostname.includes('replit.dev')) {
     // For Replit, the backend should be accessible on the same hostname but port 5000
     // The URL format is: https://hostname:5000
     const hostname = window.location.hostname;
     return `https://${hostname}:5000`;
+  }
+  
+  // For EC2/production: use same origin (assuming backend is proxied or on same domain)
+  // If backend is on a different port, you'll need to set VITE_API_BASE_URL env var
+  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    // For production, assume backend is on same origin or proxied
+    return window.location.origin;
   }
   
   // For local development

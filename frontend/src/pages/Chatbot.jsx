@@ -761,6 +761,17 @@ function Chatbot({
   // State for files fetched from Supabase
   const [supabaseFiles, setSupabaseFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  // Merge local session uploads with Supabase files and dedupe by name/size
+  const combinedFiles = useMemo(() => {
+    const map = new Map();
+    [...uploadedFiles, ...supabaseFiles].forEach(file => {
+      const key = `${file.name || file.filename || 'unknown'}-${file.size || 0}`;
+      if (!map.has(key)) {
+        map.set(key, file);
+      }
+    });
+    return Array.from(map.values());
+  }, [uploadedFiles, supabaseFiles]);
   
   // State for notebook management (use props if provided, otherwise use local state)
   const [currentNotebookId, setCurrentNotebookId] = useState(propCurrentNotebookId || null);
@@ -1921,16 +1932,50 @@ function Chatbot({
           console.warn('No currentNotebookId set, backend will use default notebook');
         }
       } catch (_) {}
+      
+      console.log('Uploading to:', API_ENDPOINTS.UPLOAD);
       const response = await fetch(API_ENDPOINTS.UPLOAD, {
         method: 'POST',
         body: formData,
       });
+      
+      // Check response status and content type before parsing
+      const contentType = response.headers.get('content-type');
+      console.log('Response status:', response.status, 'Content-Type:', contentType);
+      
+      if (!response.ok) {
+        // Try to get error message from response
+        let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorMessage;
+          } else {
+            // If it's HTML, read as text to see what the error is
+            const text = await response.text();
+            console.error('Non-JSON error response:', text.substring(0, 500));
+            errorMessage = `Server returned HTML instead of JSON. Check backend logs. Status: ${response.status}`;
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+        }
+        throw new Error(errorMessage);
+      }
+      
+      // Only parse as JSON if content-type is correct
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Expected JSON but got:', contentType, text.substring(0, 500));
+        throw new Error(`Server returned ${contentType || 'unknown content type'} instead of JSON. Check backend configuration.`);
+      }
+      
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to upload file to backend');
+      console.log('Upload successful:', data);
       backendSuccess = true;
     } catch (error) {
       backendError = error;
       console.error('Backend upload error:', error);
+      console.error('Upload URL was:', API_ENDPOINTS.UPLOAD);
     }
 
     // 3. UI update logic
@@ -2301,9 +2346,9 @@ function Chatbot({
                 </svg>
               </div>
               <span className="font-medium text-sm">Files</span>
-                {(uploadedFiles.length > 0 || supabaseFiles.length > 0) && (
+                {combinedFiles.length > 0 && (
                 <div className="flex items-center justify-center w-5 h-5 bg-red-500 text-white rounded-full text-xs font-medium">
-                    {uploadedFiles.length + supabaseFiles.length}
+                    {combinedFiles.length}
                 </div>
               )}
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" className={`text-gray-500 transition-transform duration-200 ${isFilesDropdownOpen ? 'rotate-180' : ''}`}>
@@ -3278,7 +3323,7 @@ function Chatbot({
                 </div>
                 <div>
                   <h3 className="font-semibold text-gray-900 text-base">Files</h3>
-                  <p className="text-xs text-gray-500">{uploadedFiles.length + supabaseFiles.length} file{(uploadedFiles.length + supabaseFiles.length) !== 1 ? 's' : ''} uploaded</p>
+                  <p className="text-xs text-gray-500">{combinedFiles.length} file{combinedFiles.length !== 1 ? 's' : ''} uploaded</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -3328,11 +3373,11 @@ function Chatbot({
             ) : (
               <div className="p-3">
                 {/* Combine current session files and Supabase files */}
-                {[...uploadedFiles, ...supabaseFiles].map((file, index) => (
+                {combinedFiles.map((file, index) => (
                   <div
                     key={`${file.supabaseDocument ? 'supabase' : 'session'}-${file.id}`}
                     className={`flex items-center gap-4 px-4 py-3 rounded-2xl hover:bg-gray-50/60 transition-all duration-200 group ${
-                      index !== (uploadedFiles.length + supabaseFiles.length) - 1 ? 'mb-2' : ''
+                      index !== combinedFiles.length - 1 ? 'mb-2' : ''
                     }`}
                   >
                     <div className="flex items-center justify-center w-10 h-10 bg-red-50 rounded-xl">
