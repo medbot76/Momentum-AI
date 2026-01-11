@@ -47,6 +47,28 @@ const UnifiedInputComponent = ({
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
   const [isModelSelectorClosing, setIsModelSelectorClosing] = useState(false);
 
+  // Auto-resize textarea when inputMessage changes
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      const scrollHeight = textarea.scrollHeight;
+      const minHeight = 140;
+      const maxHeight = 300;
+      // Add extra line height buffer for partially visible wrapped lines
+      const lineHeight = 28;
+      const adjustedHeight = scrollHeight + lineHeight;
+      
+      if (adjustedHeight <= maxHeight) {
+        textarea.style.height = Math.max(adjustedHeight, minHeight) + 'px';
+        textarea.style.overflowY = 'hidden';
+      } else {
+        textarea.style.height = maxHeight + 'px';
+        textarea.style.overflowY = 'auto';
+      }
+    }
+  }, [inputMessage]);
+
   // Model options with icons
   const modelOptions = [
     { value: 'Claude 4 Sonnet', label: 'Claude 4 Sonnet' },
@@ -534,7 +556,26 @@ const UnifiedInputComponent = ({
           placeholder={placeholder}
           className="w-full px-6 pt-5 pb-19 text-lg bg-transparent resize-none placeholder-gray-400 focus:outline-none"
           value={inputMessage}
-          onChange={(e) => setInputMessage(e.target.value)}
+          onChange={(e) => {
+            setInputMessage(e.target.value);
+            // Auto-resize on change
+            const textarea = e.target;
+            textarea.style.height = 'auto';
+            const scrollHeight = textarea.scrollHeight;
+            const minHeight = 140;
+            const maxHeight = 300;
+            // Add extra line height buffer for partially visible wrapped lines
+            const lineHeight = 28;
+            const adjustedHeight = scrollHeight + lineHeight;
+            
+            if (adjustedHeight <= maxHeight) {
+              textarea.style.height = Math.max(adjustedHeight, minHeight) + 'px';
+              textarea.style.overflowY = 'hidden';
+            } else {
+              textarea.style.height = maxHeight + 'px';
+              textarea.style.overflowY = 'auto';
+            }
+          }}
           onKeyPress={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault();

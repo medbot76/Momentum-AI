@@ -48,13 +48,21 @@ class RAGFlashcards(MultiHopRAGPipeline):  # Use MultiHopRAGPipeline by default;
         """
         if num_cards < 1:
             raise ValueError("num_cards must be ≥ 1")
-
-        # 1) Pull context from the vector store
-        search_q = f"Give a concise yet complete explanation of {topic}."
-        res = await self.query(question=search_q, notebook_id=notebook_id, top_k=top_k, user_id=user_id)
-        context = "\n\n".join(c.text for c in res["chunks"]) if res["chunks"] else ""
-        if not context:
-            return []
+        # Temporarily lower the similarity threshold for better matching
+        # This allows chunks with lower similarity scores to be included for flashcard generation
+        original_threshold = self.similarity_threshold
+        self.similarity_threshold = 0.15  # Lower threshold to allow more chunks through
+        
+        try:
+            # 1) Pull context from the vector store
+            search_q = f"Give a concise yet complete explanation of {topic}."
+            res = await self.query(question=search_q, notebook_id=notebook_id, top_k=top_k, user_id=user_id)
+            context = "\n\n".join(c.text for c in res["chunks"]) if res["chunks"] else ""
+            if not context:
+                return []
+        finally:
+            # Restore original threshold
+            self.similarity_threshold = original_threshold
 
         # 2) Ask Gemini to craft JSON flashcards
         model = genai.GenerativeModel("models/gemini-2.0-flash")
