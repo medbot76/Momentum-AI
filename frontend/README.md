@@ -39,6 +39,13 @@ Instead, it will copy all the configuration files and the transitive dependencie
 
 You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
+### Replit → Momentum-AI session handoff
+
+If users sign up on the Replit marketing app and are sent here with a one-time code, the app uses `/auth/callback` to exchange the code for a Supabase session so they land already signed in.
+
+- **Route:** `/auth/callback?code=<ONE_TIME_CODE>`
+- **Env (optional for local dev):** Set `REACT_APP_REPLIT_APP_URL` to the Replit app base URL (e.g. `https://your-replit-app.replit.app`) so the frontend can call `GET <REPLIT_APP_URL>/api/auth/momentum-exchange?code=...`. Required for the handoff to work in production.
+
 ## Learn More
 
 You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).

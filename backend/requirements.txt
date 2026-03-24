@@ -1,3 +1,4 @@
+# Core Flask dependencies
 blinker==1.9.0
 click==8.2.1
 Flask==3.1.1
@@ -6,15 +7,60 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.2
 Werkzeug==3.1.3
+
+# AI and ML dependencies
 google-generativeai
-python-docx
-PyPDF2
 elevenlabs
 openai-whisper
+anthropic>=0.25.0
+arcadepy
+transformers
+torch
+torchvision
+torchaudio
+torchtext
+numpy
+scipy
+pydantic
+
+# Document processing
+python-docx
+PyPDF2
+pymupdf==1.23.21
+PyMuPDF
+reportlab
+pytesseract
+docx2txt
+Pillow
+
+# Audio processing
 pydub
 ffmpeg-python
 webrtcvad
-numpy
-scipy
-grpcio
+SpeechRecognition
+pyaudio
 playsound
+
+# Database and API
+supabase
+psycopg2-binary
+requests
+tiktoken
+
+# Web framework
+fastapi
+uvicorn
+python-multipart
+
+# System dependencies
+grpcio
+
+# Development and testing
+pytest
+requests_mock
+
+# Additional utilities
+youtube-transcript-api
+
+# Production WSGI server
+gunicorn

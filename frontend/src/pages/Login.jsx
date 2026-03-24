@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import supabase from '../helper/supabaseClient'
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 
 // Camera icon from Home.jsx
 const Camera = ({ className = "w-8 h-8" }) => (
@@ -12,9 +12,10 @@ const Camera = ({ className = "w-8 h-8" }) => (
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [message, setMessage] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState(location.state?.message || '');
     
     const handleSubmit = async (event) => {
         event.preventDefault();

@@ -1,4 +1,8 @@
-// Configuration for API endpoints
+// Configuration for API endpoints and Replit handoff
+const getReplitAppUrl = () => {
+  return process.env.REACT_APP_REPLIT_APP_URL || '';
+};
+
 const getApiBaseUrl = () => {
   // Check for environment variable first (for production/EC2)
   if (import.meta?.env?.VITE_API_BASE_URL) {
@@ -25,6 +29,7 @@ const getApiBaseUrl = () => {
 };
 
 export const API_BASE_URL = getApiBaseUrl();
+export { getReplitAppUrl };
 export const API_ENDPOINTS = {
   CHAT: `${API_BASE_URL}/api/chat`,
   CHAT_STREAM: `${API_BASE_URL}/api/chat/stream`,
